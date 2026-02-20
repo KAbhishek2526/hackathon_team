@@ -1,68 +1,110 @@
-const OpenAI = require('openai');
+/**
+ * Mock AI Classifier — fully local, zero external dependencies.
+ * Analyzes task title + description using rule-based logic.
+ * Returns: { category, complexity_level, estimated_time_hours }
+ */
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+console.log('AI running in MOCK mode');
 
-// Heuristic mock classification based on keywords — used as fallback
-function mockClassify(title, description) {
+// Keyword banks per category
+const CATEGORY_RULES = [
+    {
+        category: 'Design',
+        keywords: ['design', 'logo', 'poster', 'graphic', 'banner', 'ui', 'ux',
+            'figma', 'canva', 'illustrate', 'creative', 'visual', 'icon',
+            'branding', 'colour', 'color', 'layout', 'mockup', 'wireframe', 'flyer'],
+    },
+    {
+        category: 'Development',
+        keywords: ['code', 'coding', 'program', 'script', 'debug', 'bug', 'fix',
+            'develop', 'app', 'api', 'website', 'web', 'frontend', 'backend',
+            'database', 'python', 'javascript', 'html', 'css', 'react',
+            'node', 'java', 'cpp', 'automate', 'automation', 'bot', 'function'],
+    },
+    {
+        category: 'Academic',
+        keywords: ['notes', 'assignment', 'essay', 'report', 'study', 'summarize',
+            'summary', 'tutor', 'teach', 'explain', 'lecture', 'homework',
+            'thesis', 'paper', 'research', 'review', 'subject', 'topic',
+            'exam', 'quiz', 'syllabus', 'translate', 'transcribe'],
+    },
+    {
+        category: 'Writing',
+        keywords: ['write', 'writing', 'content', 'article', 'blog', 'copy',
+            'draft', 'proofread', 'edit', 'story', 'description', 'bio',
+            'proposal', 'letter', 'email', 'caption', 'post', 'social media'],
+    },
+    {
+        category: 'Media',
+        keywords: ['video', 'edit', 'photo', 'photography', 'shoot', 'record',
+            'audio', 'podcast', 'reel', 'clip', 'thumbnail', 'animation',
+            'motion', 'after effects', 'premiere', 'youtube'],
+    },
+    {
+        category: 'Research',
+        keywords: ['research', 'survey', 'data', 'analyse', 'analyze', 'analysis',
+            'collect', 'gather', 'find', 'information', 'compare', 'spreadsheet',
+            'excel', 'form', 'questionnaire'],
+    },
+];
+
+// Complexity keywords
+const HIGH_COMPLEXITY = [
+    'complex', 'advanced', 'full', 'complete', 'entire', 'large', 'professional',
+    'detailed', 'comprehensive', 'multiple', 'many', 'several', 'production',
+    'automate', 'automation', 'extensive', 'robust', 'scalable',
+];
+const LOW_COMPLEXITY = [
+    'simple', 'basic', 'quick', 'small', 'short', 'easy', 'minor', 'brief',
+    'single', 'one', 'fast', 'straightforward', 'tiny',
+];
+
+const TIME_MAP = {
+    Low: 1,
+    Medium: 1.5,
+    High: 2,
+};
+
+function classifyTask(title, description) {
     const text = (title + ' ' + description).toLowerCase();
+    const words = text.split(/\s+/);
 
-    let complexity_level = 'Medium';
-    if (text.includes('simple') || text.includes('basic') || text.includes('small')) complexity_level = 'Low';
-    if (text.includes('complex') || text.includes('advanced') || text.includes('full') || text.includes('complete')) complexity_level = 'High';
+    // --- Category detection ---
+    let detectedCategory = 'General';
+    let maxMatches = 0;
 
-    let category = 'General';
-    if (text.match(/design|logo|poster|graphic|ui|ux|figma|canva/)) category = 'Design';
-    else if (text.match(/code|develop|app|website|program|script|api|bug|fix/)) category = 'Development';
-    else if (text.match(/write|content|article|blog|essay|copy|translate/)) category = 'Writing';
-    else if (text.match(/research|data|survey|analyse|analyze|report/)) category = 'Research';
-    else if (text.match(/teach|tutor|explain|learn|study/)) category = 'Tutoring';
-    else if (text.match(/video|edit|photo|audio|record|shoot/)) category = 'Media';
-
-    const estimated_time_hours = complexity_level === 'Low' ? 1 : complexity_level === 'High' ? 4 : 2;
-
-    return { category, complexity_level, estimated_time_hours };
-}
-
-async function classifyTask(title, description) {
-    // No key set — use mock
-    if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your_openai_api_key_here') {
-        return mockClassify(title, description);
+    for (const rule of CATEGORY_RULES) {
+        const matches = rule.keywords.filter((kw) => text.includes(kw)).length;
+        if (matches > maxMatches) {
+            maxMatches = matches;
+            detectedCategory = rule.category;
+        }
     }
 
-    const prompt = `You are a task classification assistant for a student micro-task platform.
-Given the following task, respond ONLY with a valid JSON object — no markdown, no explanation.
+    // --- Complexity detection ---
+    const highHits = HIGH_COMPLEXITY.filter((kw) => text.includes(kw)).length;
+    const lowHits = LOW_COMPLEXITY.filter((kw) => text.includes(kw)).length;
 
-Task Title: ${title}
-Task Description: ${description}
-
-Respond with exactly this JSON structure:
-{
-  "category": "<string describing the task category>",
-  "complexity_level": "<Low | Medium | High>",
-  "estimated_time_hours": <number>
-}`;
-
-    try {
-        const response = await client.chat.completions.create({
-            model: 'gpt-3.5-turbo',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2,
-        });
-
-        const text = response.choices[0].message.content.trim();
-        const result = JSON.parse(text);
-
-        // Validate and normalise
-        const validComplexity = ['Low', 'Medium', 'High'];
-        if (!validComplexity.includes(result.complexity_level)) result.complexity_level = 'Medium';
-        if (typeof result.estimated_time_hours !== 'number' || result.estimated_time_hours <= 0) result.estimated_time_hours = 1;
-
-        return result;
-    } catch (err) {
-        // Graceful fallback on quota / rate-limit / network errors
-        console.warn(`OpenAI classification failed (${err.code || err.message}) — using heuristic fallback`);
-        return mockClassify(title, description);
+    let complexity_level;
+    if (highHits > lowHits) {
+        complexity_level = 'High';
+    } else if (lowHits > highHits) {
+        complexity_level = 'Low';
+    } else {
+        // Neutral — guess from description length
+        const wordCount = words.length;
+        if (wordCount > 60) complexity_level = 'High';
+        else if (wordCount > 25) complexity_level = 'Medium';
+        else complexity_level = 'Low';
     }
+
+    const estimated_time_hours = TIME_MAP[complexity_level];
+
+    return {
+        category: detectedCategory,
+        complexity_level,
+        estimated_time_hours,
+    };
 }
 
 module.exports = { classifyTask };
