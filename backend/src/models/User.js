@@ -9,7 +9,7 @@ const userSchema = new mongoose.Schema({
   reliability_score: { type: Number, default: 0 },
   skill_tier: { type: Number, default: 1 },
   weekly_hours_completed: { type: Number, default: 0 },
-  wallet_balance: { type: Number, default: 500 },
+  wallet_balance: { type: Number, default: 2000 },
   badges: { type: [String], default: [] },
   created_at: { type: Date, default: Date.now },
 });
