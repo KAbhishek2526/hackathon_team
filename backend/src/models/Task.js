@@ -20,6 +20,8 @@ const taskSchema = new mongoose.Schema({
     assigned_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     status: { type: String, enum: ['open', 'assigned', 'in_progress', 'awaiting_approval', 'completed', 'disputed', 'cancelled'], default: 'open' },
     digital_or_physical: { type: String, enum: ['digital', 'physical'], default: 'digital' },
+    postedByRole: { type: String, enum: ['student', 'global_client'], default: 'student' },
+    collegeDomain: { type: String, default: null },
     created_at: { type: Date, default: Date.now },
 });
 

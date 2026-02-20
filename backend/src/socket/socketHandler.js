@@ -4,7 +4,7 @@ const Notification = require('../models/Notification');
 const Task = require('../models/Task');
 
 /**
- * Create a notification in DB and emit it on the user's socket room.
+ * Persist a notification and emit to the user's personal room.
  */
 async function createAndEmitNotification(io, { userId, type, message, relatedTaskId }) {
     const notification = await Notification.create({ userId, type, message, relatedTaskId, isRead: false });
@@ -13,10 +13,10 @@ async function createAndEmitNotification(io, { userId, type, message, relatedTas
 }
 
 /**
- * Register all socket event handlers.
+ * Register all Socket.IO event handlers.
  */
 function registerSocketHandlers(io) {
-    // JWT auth middleware for sockets
+    // ── JWT auth middleware for every socket connection ─────────────────────
     io.use((socket, next) => {
         const token = socket.handshake.auth?.token;
         if (!token) return next(new Error('Authentication required'));
@@ -31,76 +31,68 @@ function registerSocketHandlers(io) {
 
     io.on('connection', (socket) => {
         const userId = socket.userId;
-        // Each user joins their personal room for notifications
+        // Every user gets a personal notification room
         socket.join(`user_${userId}`);
-        console.log(`[SOCKET] User ${userId} connected, joined room user_${userId}`);
+        console.log(`[SOCKET] User ${userId} connected → room user_${userId}`);
 
-        // join_task_chat — user joins the chat room for a specific task
-        socket.on('join_task_chat', async ({ taskId }) => {
+        // ── join_chat(chatId) ────────────────────────────────────────────────
+        // Joins a specific chat room identified by chatId.
+        // Works for inquiry, active, and task-detail chats.
+        socket.on('join_chat', async ({ chatId }) => {
             try {
-                const task = await Task.findById(taskId);
-                if (!task) return socket.emit('error', { message: 'Task not found' });
+                const chat = await Chat.findById(chatId);
+                if (!chat) return socket.emit('error', { message: 'Chat not found' });
 
                 const isParticipant =
-                    String(task.posted_by) === String(userId) ||
-                    String(task.assigned_to) === String(userId);
+                    String(chat.clientId) === String(userId) ||
+                    String(chat.participantId) === String(userId);
 
-                if (!isParticipant) return socket.emit('error', { message: 'Not a participant of this task' });
+                if (!isParticipant) return socket.emit('error', { message: 'Not a participant of this chat' });
 
-                socket.join(`task_${taskId}`);
-                console.log(`[SOCKET] User ${userId} joined chat room task_${taskId}`);
-
-                // Ensure chat document exists
-                const existingChat = await Chat.findOne({ taskId });
-                if (!existingChat) {
-                    await Chat.create({
-                        taskId,
-                        participants: [task.posted_by, task.assigned_to].filter(Boolean),
-                        messages: [],
-                    });
+                if (chat.status === 'closed') {
+                    return socket.emit('chat_closed', { chatId, message: 'This inquiry has been closed after another worker accepted the task.' });
                 }
 
-                socket.emit('joined_chat', { taskId });
+                socket.join(`chat_${chatId}`);
+                console.log(`[SOCKET] User ${userId} joined chat_${chatId} (status: ${chat.status})`);
+                socket.emit('joined_chat', { chatId, status: chat.status });
             } catch (err) {
-                console.error('[SOCKET] join_task_chat error:', err);
+                console.error('[SOCKET] join_chat error:', err);
                 socket.emit('error', { message: 'Failed to join chat' });
             }
         });
 
-        // send_message — persist + broadcast + notify other participant
-        socket.on('send_message', async ({ taskId, message }) => {
+        // ── send_message({chatId, message}) ─────────────────────────────────
+        socket.on('send_message', async ({ chatId, message }) => {
             try {
                 if (!message || !message.trim()) return;
 
-                const task = await Task.findById(taskId);
-                if (!task) return socket.emit('error', { message: 'Task not found' });
+                const chat = await Chat.findById(chatId);
+                if (!chat) return socket.emit('error', { message: 'Chat not found' });
 
                 const isParticipant =
-                    String(task.posted_by) === String(userId) ||
-                    String(task.assigned_to) === String(userId);
+                    String(chat.clientId) === String(userId) ||
+                    String(chat.participantId) === String(userId);
 
-                if (!isParticipant) return socket.emit('error', { message: 'Not a participant of this task' });
+                if (!isParticipant) return socket.emit('error', { message: 'Not a participant' });
+
+                if (chat.status === 'closed') {
+                    return socket.emit('error', { message: 'Cannot send messages to a closed chat' });
+                }
 
                 const msgDoc = { senderId: userId, message: message.trim(), timestamp: new Date() };
 
-                // Upsert chat document and push message
-                const chat = await Chat.findOneAndUpdate(
-                    { taskId },
-                    {
-                        $push: { messages: msgDoc },
-                        $setOnInsert: {
-                            taskId,
-                            participants: [task.posted_by, task.assigned_to].filter(Boolean),
-                        },
-                    },
-                    { upsert: true, new: true }
+                // Push message and get updated document
+                const updated = await Chat.findByIdAndUpdate(
+                    chatId,
+                    { $push: { messages: msgDoc } },
+                    { new: true }
                 );
+                const savedMsg = updated.messages[updated.messages.length - 1];
 
-                const savedMsg = chat.messages[chat.messages.length - 1];
-
-                // Broadcast to all in task room
-                io.to(`task_${taskId}`).emit('receive_message', {
-                    taskId,
+                // Broadcast to everyone in the chat room
+                io.to(`chat_${chatId}`).emit('receive_message', {
+                    chatId,
                     senderId: userId,
                     message: savedMsg.message,
                     timestamp: savedMsg.timestamp,
@@ -108,21 +100,48 @@ function registerSocketHandlers(io) {
                 });
 
                 // Notify the other participant
-                const otherUserId = String(task.posted_by) === String(userId)
-                    ? task.assigned_to
-                    : task.posted_by;
+                const otherUserId = String(chat.clientId) === String(userId)
+                    ? chat.participantId
+                    : chat.clientId;
 
                 if (otherUserId) {
                     await createAndEmitNotification(io, {
                         userId: otherUserId,
                         type: 'new_message',
-                        message: 'New message in your task chat.',
-                        relatedTaskId: taskId,
+                        message: 'You have a new chat message.',
+                        relatedTaskId: chat.taskId,
                     });
                 }
             } catch (err) {
                 console.error('[SOCKET] send_message error:', err);
                 socket.emit('error', { message: 'Failed to send message' });
+            }
+        });
+
+        // ── Backward-compat: join_task_chat(taskId) ──────────────────────────
+        // Finds the active chat for this task and joins its room.
+        socket.on('join_task_chat', async ({ taskId }) => {
+            try {
+                const task = await Task.findById(taskId);
+                if (!task) return socket.emit('error', { message: 'Task not found' });
+
+                // Build query: client sees any active chat, worker sees their own
+                const isClient = String(task.posted_by) === String(userId);
+                let chat;
+                if (isClient) {
+                    chat = await Chat.findOne({ taskId, status: 'active' });
+                } else {
+                    chat = await Chat.findOne({ taskId, participantId: userId });
+                }
+
+                if (!chat) return socket.emit('error', { message: 'No active chat found for this task' });
+                if (chat.status === 'closed') return socket.emit('chat_closed', { chatId: chat._id });
+
+                socket.join(`chat_${chat._id}`);
+                socket.emit('joined_chat', { chatId: chat._id, status: chat.status });
+            } catch (err) {
+                console.error('[SOCKET] join_task_chat error:', err);
+                socket.emit('error', { message: 'Failed to join task chat' });
             }
         });
 

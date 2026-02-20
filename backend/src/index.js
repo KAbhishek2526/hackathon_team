@@ -11,6 +11,7 @@ const userRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
 const pricingRoutes = require('./routes/pricing');
 const notificationRoutes = require('./routes/notifications');
+const chatRoutes = require('./routes/chats');
 
 const Config = require('./models/Config');
 const { registerSocketHandlers } = require('./socket/socketHandler');
@@ -34,6 +35,7 @@ app.use('/api/users', userRoutes);
 app.use('/api', adminRoutes);
 app.use('/api/pricing', pricingRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/chats', chatRoutes);
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));

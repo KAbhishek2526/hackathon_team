@@ -9,14 +9,24 @@ const router = express.Router();
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
     try {
-        const { name, email, password, skill_tags } = req.body;
+        const { name, email, password, skill_tags, role } = req.body;
 
         if (!name || !email || !password) {
             return res.status(400).json({ error: 'name, email, and password are required' });
         }
 
-        if (!domainCheck(email)) {
-            return res.status(403).json({ error: 'Email domain not allowed. Use a verified college email.' });
+        const userRole = role === 'global_client' ? 'global_client' : 'student';
+
+        // Domain check only for students
+        let college_domain = null;
+        let isCollegeVerified = false;
+
+        if (userRole === 'student') {
+            if (!domainCheck(email)) {
+                return res.status(403).json({ error: 'Email domain not allowed. Use a verified college email (.edu, .ac.in, etc.).' });
+            }
+            college_domain = email.split('@')[1].toLowerCase();
+            isCollegeVerified = true;
         }
 
         const existing = await User.findOne({ email: email.toLowerCase() });
@@ -25,19 +35,27 @@ router.post('/register', async (req, res) => {
         }
 
         const password_hash = await bcrypt.hash(password, 10);
-        const college_domain = email.split('@')[1];
 
         const user = await User.create({
             name,
             email: email.toLowerCase(),
             password_hash,
+            role: userRole,
             college_domain,
-            skill_tags: skill_tags || [],
+            isCollegeVerified,
+            skill_tags: userRole === 'student' ? (skill_tags || []) : [],
         });
 
-        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
 
-        res.status(201).json({ token, user: { id: user._id, name: user.name, email: user.email } });
+        res.status(201).json({
+            token,
+            user: { id: user._id, name: user.name, email: user.email, role: user.role },
+        });
     } catch (err) {
         console.error('Register error:', err);
         res.status(500).json({ error: 'Server error' });
@@ -63,9 +81,16 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: user.role || 'student' },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
 
-        res.json({ token, user: { id: user._id, name: user.name, email: user.email } });
+        res.json({
+            token,
+            user: { id: user._id, name: user.name, email: user.email, role: user.role || 'student' },
+        });
     } catch (err) {
         console.error('Login error:', err);
         res.status(500).json({ error: 'Server error' });

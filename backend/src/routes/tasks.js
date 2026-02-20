@@ -75,10 +75,30 @@ router.get('/:id', authMiddleware, async (req, res) => {
 router.get('/', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
-        const tasks = await Task.find({
+        const userRole = req.user.role;
+
+        // Global clients cannot see/accept tasks
+        if (userRole === 'global_client') {
+            return res.json([]);
+        }
+
+        // Students: show digital tasks + physical tasks from same college
+        const user = await User.findById(userId).select('college_domain');
+        const collegeDomain = user?.college_domain;
+
+        const query = {
             status: 'open',
             posted_by: { $ne: userId },
-        })
+            $or: [
+                { digital_or_physical: 'digital' },
+                ...(collegeDomain
+                    ? [{ digital_or_physical: 'physical', collegeDomain }]
+                    : [{ digital_or_physical: 'physical', collegeDomain: null }]
+                ),
+            ],
+        };
+
+        const tasks = await Task.find(query)
             .populate('posted_by', 'name college_domain')
             .sort({ created_at: -1 });
         res.json(tasks);
@@ -100,6 +120,14 @@ router.post('/', authMiddleware, async (req, res) => {
 
         const poster = await User.findById(userId);
         if (!poster) return res.status(404).json({ error: 'User not found' });
+
+        // Global client minimum deposit check
+        const MIN_GLOBAL_DEPOSIT = 2000;
+        if (poster.role === 'global_client' && poster.wallet_balance < MIN_GLOBAL_DEPOSIT) {
+            return res.status(400).json({
+                error: `Professional accounts must maintain a minimum wallet balance of ₹${MIN_GLOBAL_DEPOSIT} to post tasks. Current balance: ₹${poster.wallet_balance}.`,
+            });
+        }
 
         let aiSuggestedPrice = 0, deterministicPrice = 0, mlPredictionVal = null;
         let demandScore = 1.0, inflationFactorVal = 1.0;
@@ -140,6 +168,8 @@ router.post('/', authMiddleware, async (req, res) => {
             assigned_to: null,
             status: 'open',
             digital_or_physical: digital_or_physical || 'digital',
+            postedByRole: poster.role || 'student',
+            collegeDomain: poster.role === 'student' ? poster.college_domain : null,
         });
 
         await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -finalPrice } });
@@ -158,6 +188,11 @@ router.post('/', authMiddleware, async (req, res) => {
 router.post('/:id/accept', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
+
+        // Global clients cannot accept tasks
+        if (req.user.role === 'global_client') {
+            return res.status(403).json({ error: 'Professional accounts cannot accept tasks. Only students can work on tasks.' });
+        }
         const task = await Task.findById(req.params.id);
         if (!task) return res.status(404).json({ error: 'Task not found' });
         if (task.status !== 'open') return res.status(400).json({ error: 'Task is no longer available' });
@@ -173,14 +208,35 @@ router.post('/:id/accept', authMiddleware, async (req, res) => {
 
         await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { receiver_id: userId });
 
-        // Create chat document for this task
+        // ── Inquiry → Active lifecycle ──────────────────────────────────────
+        // Find or create the accepting worker's inquiry chat and set to active
         await Chat.findOneAndUpdate(
-            { taskId: task._id },
-            { taskId: task._id, participants: [task.posted_by, userId], $setOnInsert: { messages: [] } },
+            { taskId: task._id, participantId: userId },
+            {
+                taskId: task._id,
+                clientId: task.posted_by,
+                participantId: userId,
+                status: 'active',
+            },
             { upsert: true, new: true }
         );
 
+        // Close all other inquiry chats for this task
+        await Chat.updateMany(
+            { taskId: task._id, participantId: { $ne: userId }, status: 'inquiry' },
+            { status: 'closed' }
+        );
+
+        // Emit chat_closed to the task room for closed participants
         const io = getIo(req);
+        const closedChats = await Chat.find({ taskId: task._id, status: 'closed' });
+        for (const closedChat of closedChats) {
+            io.to(`chat_${closedChat._id}`).emit('chat_closed', {
+                chatId: closedChat._id,
+                message: 'Another worker has been assigned to this task. This inquiry is now closed.',
+            });
+        }
+
         await createAndEmitNotification(io, {
             userId: task.posted_by,
             type: 'task_accepted',

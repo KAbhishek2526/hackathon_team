@@ -45,6 +45,10 @@ export const api = {
     getUnreadCount: () => apiFetch<{ count: number }>('/api/notifications/unread-count'),
     markNotificationRead: (id: string) => apiFetch<object>(`/api/notifications/${id}/read`, { method: 'PATCH' }),
     markAllNotificationsRead: () => apiFetch<object>('/api/notifications/read-all', { method: 'PATCH' }),
+    // Chat — inquiry system
+    openInquiryChat: (taskId: string) => apiFetch<{ chatId: string; status: string; messages: object[] }>(`/api/chats/task/${taskId}/inquiry`, { method: 'POST' }),
+    getChat: (chatId: string) => apiFetch<object>(`/api/chats/${chatId}`),
+    getTaskChats: (taskId: string) => apiFetch<object[]>(`/api/chats/task/${taskId}`),
     resetWeek: () => apiFetch<object>('/api/reset-week', { method: 'POST' }),
 };
 
