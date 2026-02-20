@@ -34,6 +34,8 @@ export const api = {
     acceptTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/accept`, { method: 'POST' }),
     completeTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/complete`, { method: 'POST' }),
     cancelTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
+    updateTaskPrice: (id: string, price: number) => apiFetch<object>(`/api/tasks/${id}/update-price`, { method: 'PATCH', body: JSON.stringify({ price }) }),
+    suggestPrice: (body: object) => apiFetch<{ aiSuggestedPrice: number; deterministicPrice: number; mlPrediction: number | null; demandScore: number; inflationFactor: number }>('/api/pricing/suggest', { method: 'POST', body: JSON.stringify(body) }),
     resetWeek: () => apiFetch<object>('/api/reset-week', { method: 'POST' }),
 };
 

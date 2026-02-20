@@ -7,6 +7,9 @@ const authRoutes = require('./routes/auth');
 const taskRoutes = require('./routes/tasks');
 const userRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
+const pricingRoutes = require('./routes/pricing');
+
+const Config = require('./models/Config');
 
 const app = express();
 
@@ -25,6 +28,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api', adminRoutes);
+app.use('/api/pricing', pricingRoutes);
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
@@ -41,8 +45,17 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/micro_
 
 mongoose
     .connect(MONGODB_URI)
-    .then(() => {
+    .then(async () => {
         console.log('✅ Connected to MongoDB');
+
+        // Seed default inflationFactor if not already set
+        await Config.findOneAndUpdate(
+            { key: 'inflationFactor' },
+            { key: 'inflationFactor', value: 1.00, updatedAt: new Date() },
+            { upsert: true }
+        );
+        console.log('✅ Inflation factor seeded (default: 1.00)');
+
         app.listen(PORT, () => {
             console.log(`🚀 Backend running on http://localhost:${PORT}`);
         });
