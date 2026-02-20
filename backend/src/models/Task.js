@@ -18,7 +18,7 @@ const taskSchema = new mongoose.Schema({
     inflationFactor: { type: Number, default: 1.0 },
     posted_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     assigned_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    status: { type: String, enum: ['open', 'assigned', 'completed', 'cancelled'], default: 'open' },
+    status: { type: String, enum: ['open', 'assigned', 'in_progress', 'awaiting_approval', 'completed', 'disputed', 'cancelled'], default: 'open' },
     digital_or_physical: { type: String, enum: ['digital', 'physical'], default: 'digital' },
     created_at: { type: Date, default: Date.now },
 });

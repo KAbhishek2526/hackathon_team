@@ -7,9 +7,12 @@ interface Task {
     title: string;
     description: string;
     category: string;
+    subcategory: string;
     complexity_level: string;
     estimated_time_hours: number;
+    estimatedHours: number;
     price: number;
+    finalPrice: number;
     digital_or_physical: string;
     posted_by: { name: string; college_domain: string };
     created_at: string;
@@ -43,7 +46,7 @@ export default function AvailableTasksPage() {
         try {
             await api.acceptTask(id);
             setTasks((prev) => prev.filter((t) => t._id !== id));
-            setActionMsg('Task accepted! Check My Tasks to complete it.');
+            setActionMsg('Task accepted! Go to My Tasks to view and chat.');
         } catch (err: unknown) {
             setActionError(err instanceof Error ? err.message : 'Failed to accept task');
         } finally {
@@ -59,12 +62,8 @@ export default function AvailableTasksPage() {
             </div>
 
             {error && <p className="text-red-400 mb-4">{error}</p>}
-            {actionMsg && (
-                <div className="mb-4 p-3 bg-green-900/40 border border-green-700 rounded text-green-300 text-sm">{actionMsg}</div>
-            )}
-            {actionError && (
-                <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">{actionError}</div>
-            )}
+            {actionMsg && <div className="mb-4 p-3 bg-green-900/40 border border-green-700 rounded text-green-300 text-sm">{actionMsg}</div>}
+            {actionError && <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">{actionError}</div>}
             {loading && <p className="text-slate-400">Loading…</p>}
 
             {!loading && tasks.length === 0 && (
@@ -80,19 +79,19 @@ export default function AvailableTasksPage() {
                                 <p className="text-slate-400 text-sm mt-1 leading-relaxed">{task.description}</p>
                             </div>
                             <div className="text-right shrink-0">
-                                <p className="text-indigo-400 font-bold text-xl">₹{task.price}</p>
-                                <p className="text-slate-500 text-xs mt-0.5">{task.estimated_time_hours}h</p>
+                                <p className="text-indigo-400 font-bold text-xl">₹{task.finalPrice || task.price}</p>
+                                <p className="text-slate-500 text-xs mt-0.5">{task.estimatedHours || task.estimated_time_hours}h</p>
                             </div>
                         </div>
 
                         <div className="flex flex-wrap gap-2 mt-4">
-                            <span className="text-xs px-2.5 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-300">{task.category}</span>
-                            <span className={`text-xs px-2.5 py-1 rounded-full border ${complexityColor[task.complexity_level]}`}>{task.complexity_level}</span>
+                            <span className="text-xs px-2.5 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-300">{task.category}{task.subcategory ? ` / ${task.subcategory}` : ''}</span>
+                            <span className={`text-xs px-2.5 py-1 rounded-full border ${complexityColor[task.complexity_level] || 'text-slate-400 bg-slate-800 border-slate-700'}`}>{task.complexity_level}</span>
                             <span className="text-xs px-2.5 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-300">{task.digital_or_physical}</span>
                             <span className="text-xs px-2.5 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-400">By {task.posted_by?.name}</span>
                         </div>
 
-                        <div className="mt-4">
+                        <div className="mt-4 flex gap-3">
                             <button
                                 id={`accept-${task._id}`}
                                 onClick={() => handleAccept(task._id)}
@@ -101,6 +100,12 @@ export default function AvailableTasksPage() {
                             >
                                 {accepting === task._id ? 'Accepting…' : 'Accept Task'}
                             </button>
+                            <a
+                                href={`/tasks/${task._id}`}
+                                className="px-5 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold rounded-lg transition-colors"
+                            >
+                                💬 View Details
+                            </a>
                         </div>
                     </div>
                 ))}

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import LogoutButton from './components/LogoutButton';
+import NotificationBell from './components/NotificationBell';
 
 export const metadata: Metadata = {
   title: 'MicroTask — Student Micro-Economy Platform',
@@ -22,7 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <nav className="border-b border-slate-800 bg-slate-900">
           <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
             <a href="/dashboard" className="font-bold text-lg text-indigo-400 tracking-tight">MicroTask</a>
-            <div className="flex gap-6">
+            <div className="flex gap-6 items-center">
               <NavLink href="/dashboard" label="Dashboard" />
               <NavLink href="/tasks/post" label="Post Task" />
               <NavLink href="/tasks/available" label="Available Tasks" />
@@ -30,7 +31,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/profile" label="Profile" />
               <NavLink href="/wallet" label="Wallet" />
             </div>
-            <LogoutButton />
+            <div className="flex items-center gap-3">
+              <NotificationBell />
+              <LogoutButton />
+            </div>
           </div>
         </nav>
         <main className="max-w-5xl mx-auto px-4 py-8">{children}</main>

@@ -2,6 +2,8 @@ const express = require('express');
 const Task = require('../models/Task');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
+const Chat = require('../models/Chat');
+const Notification = require('../models/Notification');
 const authMiddleware = require('../middleware/auth');
 const { awardBadges, calculateTier } = require('../services/badgeService');
 const { calculateDeterministicPrice, combinePrice, getDemandMultiplier, getInflationFactor } = require('../services/pricingEngine');
@@ -10,161 +12,33 @@ const { getCategoryConfig, getSubcategoryConfig, validateCategoryCombo } = requi
 
 const router = express.Router();
 
-/**
- * Helper: run full hybrid pricing pipeline.
- * Returns { aiSuggestedPrice, deterministicPrice, mlPrediction, demandScore, inflationFactor }
- */
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+
+function getIo(req) { return req.app.get('io'); }
+
+async function createAndEmitNotification(io, { userId, type, message, relatedTaskId }) {
+    const notification = await Notification.create({ userId, type, message, relatedTaskId, isRead: false });
+    if (io) io.to(`user_${userId}`).emit('new_notification', notification);
+    return notification;
+}
+
 async function runPricingPipeline({ category, subcategory, hours, tier }) {
     const { deterministicPrice, demandMultiplier, inflationFactor } = await calculateDeterministicPrice({
         category, subcategory, hours: Number(hours), tier: Number(tier) || 1,
     });
-
     const catConfig = getCategoryConfig(category);
     const subConfig = getSubcategoryConfig(category, subcategory);
-
     const mlPrediction = await getMlPrediction({
-        categoryId: catConfig.id,
-        subcategoryId: subConfig.id,
-        hours: Number(hours),
-        tier: Number(tier) || 1,
-        demandScore: demandMultiplier,
-        inflationFactor,
-        deterministicPrice,
+        categoryId: catConfig.id, subcategoryId: subConfig.id,
+        hours: Number(hours), tier: Number(tier) || 1,
+        demandScore: demandMultiplier, inflationFactor, deterministicPrice,
     });
-
     const aiSuggestedPrice = combinePrice(deterministicPrice, mlPrediction);
-
     return { aiSuggestedPrice, deterministicPrice, mlPrediction, demandScore: demandMultiplier, inflationFactor };
 }
 
-// POST /api/tasks — Create a task with hybrid AI pricing. No price restrictions.
-router.post('/', authMiddleware, async (req, res) => {
-    try {
-        const { title, description, digital_or_physical, category, subcategory, estimatedHours, userPrice } = req.body;
-        const userId = req.user.id;
+/* ─── GET /api/tasks/:id — Single task ────────────────────────────────────── */
 
-        if (!title || !description) {
-            return res.status(400).json({ error: 'title and description are required' });
-        }
-
-        const poster = await User.findById(userId);
-        if (!poster) return res.status(404).json({ error: 'User not found' });
-
-        // --- Pricing ---
-        let aiSuggestedPrice = 0;
-        let deterministicPrice = 0;
-        let mlPredictionVal = null;
-        let demandScore = 1.0;
-        let inflationFactorVal = 1.0;
-        let resolvedCategory = category || 'General';
-        let resolvedSubcategory = subcategory || '';
-        let resolvedHours = Number(estimatedHours) || 1;
-        let complexity_level = 'Low';
-
-        // Use hybrid pricing if category/subcategory provided and valid
-        const hasValidCategory = category && subcategory && validateCategoryCombo(category, subcategory).valid;
-        if (hasValidCategory) {
-            const pricing = await runPricingPipeline({
-                category,
-                subcategory,
-                hours: resolvedHours,
-                tier: poster.skill_tier || 1,
-            });
-            aiSuggestedPrice = pricing.aiSuggestedPrice;
-            deterministicPrice = pricing.deterministicPrice;
-            mlPredictionVal = pricing.mlPrediction;
-            demandScore = pricing.demandScore;
-            inflationFactorVal = pricing.inflationFactor;
-        } else {
-            // Fallback: simple formula for backward compat / old clients
-            aiSuggestedPrice = Math.round(resolvedHours * 200);
-            deterministicPrice = aiSuggestedPrice;
-        }
-
-        // finalPrice: user's chosen price — no restriction, purely advisory
-        const finalPrice = (userPrice !== undefined && userPrice !== null)
-            ? Math.round(Number(userPrice))
-            : aiSuggestedPrice;
-
-        const isPriceEdited = finalPrice !== aiSuggestedPrice;
-
-        // Check wallet balance
-        if (poster.wallet_balance < finalPrice) {
-            return res.status(400).json({
-                error: `Insufficient wallet balance. Need ₹${finalPrice}, have ₹${poster.wallet_balance}`,
-            });
-        }
-
-        // Create task
-        const task = await Task.create({
-            title,
-            description,
-            category: resolvedCategory,
-            subcategory: resolvedSubcategory,
-            complexity_level,
-            estimated_time_hours: resolvedHours,
-            estimatedHours: resolvedHours,
-            price: finalPrice,
-            aiSuggestedPrice,
-            deterministicPrice,
-            mlPrediction: mlPredictionVal,
-            finalPrice,
-            isPriceEdited,
-            demandScore,
-            inflationFactor: inflationFactorVal,
-            posted_by: userId,
-            assigned_to: null,
-            status: 'open',
-            digital_or_physical: digital_or_physical || 'digital',
-        });
-
-        // Deduct from poster wallet & hold in escrow
-        await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -finalPrice } });
-        await Transaction.create({
-            task_id: task._id,
-            payer_id: userId,
-            receiver_id: null,
-            amount: finalPrice,
-            status: 'escrow',
-        });
-
-        console.log(`[TASK CREATED] id=${task._id} by=${userId} det=${deterministicPrice} ml=${mlPredictionVal} ai=${aiSuggestedPrice} final=${finalPrice}`);
-
-        res.status(201).json({
-            task,
-            aiSuggestedPrice,
-            deterministicPrice,
-            mlPrediction: mlPredictionVal,
-            finalPrice,
-            price: finalPrice,
-            isPriceEdited,
-            assigned_to: null,
-        });
-    } catch (err) {
-        console.error('Task creation error:', err);
-        res.status(500).json({ error: 'Server error during task creation' });
-    }
-});
-
-// GET /api/tasks — List open tasks NOT posted by the current user
-router.get('/', authMiddleware, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const tasks = await Task.find({
-            status: 'open',
-            posted_by: { $ne: userId },
-        })
-            .populate('posted_by', 'name college_domain')
-            .sort({ created_at: -1 });
-
-        res.json(tasks);
-    } catch (err) {
-        console.error('Available tasks error:', err);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// GET /api/tasks/my — Tasks posted by or assigned to current user
 router.get('/my', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
@@ -184,107 +58,137 @@ router.get('/my', authMiddleware, async (req, res) => {
     }
 });
 
-// PATCH /api/tasks/:id/update-price — Update price (open + unassigned only, no restriction)
-router.patch('/:id/update-price', authMiddleware, async (req, res) => {
+router.get('/:id', authMiddleware, async (req, res) => {
+    try {
+        const task = await Task.findById(req.params.id)
+            .populate('posted_by', 'name email')
+            .populate('assigned_to', 'name email');
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        res.json(task);
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── GET /api/tasks — Available tasks ────────────────────────────────────── */
+
+router.get('/', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
-        const { price: newPrice } = req.body;
+        const tasks = await Task.find({
+            status: 'open',
+            posted_by: { $ne: userId },
+        })
+            .populate('posted_by', 'name college_domain')
+            .sort({ created_at: -1 });
+        res.json(tasks);
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
-        if (newPrice === undefined || newPrice === null) {
-            return res.status(400).json({ error: 'price is required' });
-        }
+/* ─── POST /api/tasks — Create task ───────────────────────────────────────── */
 
-        const parsedPrice = Math.round(Number(newPrice));
-        if (isNaN(parsedPrice) || parsedPrice <= 0) {
-            return res.status(400).json({ error: 'price must be a positive number' });
-        }
+router.post('/', authMiddleware, async (req, res) => {
+    try {
+        const { title, description, digital_or_physical, category, subcategory, estimatedHours, userPrice } = req.body;
+        const userId = req.user.id;
 
-        const task = await Task.findById(req.params.id);
-        if (!task) return res.status(404).json({ error: 'Task not found' });
-
-        if (String(task.posted_by) !== String(userId)) {
-            return res.status(403).json({ error: 'Only the task poster can update the price' });
+        if (!title || !description) {
+            return res.status(400).json({ error: 'title and description are required' });
         }
-        if (task.status !== 'open') {
-            return res.status(400).json({ error: 'Price can only be updated while the task is open' });
-        }
-        if (task.assigned_to) {
-            return res.status(400).json({ error: 'Price is locked — task has already been assigned' });
-        }
-
-        // No range restriction — adjust escrow delta
-        const oldPrice = task.finalPrice || task.price;
-        const delta = parsedPrice - oldPrice;
 
         const poster = await User.findById(userId);
         if (!poster) return res.status(404).json({ error: 'User not found' });
 
-        if (delta > 0 && poster.wallet_balance < delta) {
-            return res.status(400).json({
-                error: `Insufficient wallet balance to increase price. Need ₹${delta} more, have ₹${poster.wallet_balance}`,
+        let aiSuggestedPrice = 0, deterministicPrice = 0, mlPredictionVal = null;
+        let demandScore = 1.0, inflationFactorVal = 1.0;
+        let resolvedHours = Number(estimatedHours) || 1;
+
+        const hasValidCategory = category && subcategory && validateCategoryCombo(category, subcategory).valid;
+        if (hasValidCategory) {
+            const pricing = await runPricingPipeline({
+                category, subcategory, hours: resolvedHours, tier: poster.skill_tier || 1,
             });
+            ({ aiSuggestedPrice, deterministicPrice, mlPrediction: mlPredictionVal, demandScore, inflationFactor: inflationFactorVal } = pricing);
+        } else {
+            aiSuggestedPrice = Math.round(resolvedHours * 200);
+            deterministicPrice = aiSuggestedPrice;
         }
 
-        if (delta > 0) {
-            await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -delta } });
-        } else if (delta < 0) {
-            await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: Math.abs(delta) } });
+        const finalPrice = (userPrice !== undefined && userPrice !== null)
+            ? Math.round(Number(userPrice)) : aiSuggestedPrice;
+        const isPriceEdited = finalPrice !== aiSuggestedPrice;
+
+        if (poster.wallet_balance < finalPrice) {
+            return res.status(400).json({ error: `Insufficient wallet balance. Need ₹${finalPrice}, have ₹${poster.wallet_balance}` });
         }
 
-        await Transaction.findOneAndUpdate(
-            { task_id: task._id, status: 'escrow' },
-            { amount: parsedPrice }
-        );
+        const task = await Task.create({
+            title, description,
+            category: category || 'General',
+            subcategory: subcategory || '',
+            complexity_level: 'Low',
+            estimated_time_hours: resolvedHours,
+            estimatedHours: resolvedHours,
+            price: finalPrice,
+            aiSuggestedPrice, deterministicPrice,
+            mlPrediction: mlPredictionVal,
+            finalPrice, isPriceEdited, demandScore,
+            inflationFactor: inflationFactorVal,
+            posted_by: userId,
+            assigned_to: null,
+            status: 'open',
+            digital_or_physical: digital_or_physical || 'digital',
+        });
 
-        task.finalPrice = parsedPrice;
-        task.price = parsedPrice;
-        task.isPriceEdited = true;
-        await task.save();
+        await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -finalPrice } });
+        await Transaction.create({ task_id: task._id, payer_id: userId, receiver_id: null, amount: finalPrice, status: 'escrow' });
 
-        const populated = await Task.findById(task._id)
-            .populate('posted_by', 'name')
-            .populate('assigned_to', 'name');
-
-        console.log(`[PRICE UPDATED] id=${task._id} old=${oldPrice} new=${parsedPrice} delta=${delta}`);
-        res.json({ message: 'Price updated successfully', task: populated, finalPrice: parsedPrice, delta });
+        console.log(`[TASK CREATED] id=${task._id} final=${finalPrice}`);
+        res.status(201).json({ task, aiSuggestedPrice, deterministicPrice, mlPrediction: mlPredictionVal, finalPrice, price: finalPrice, isPriceEdited, assigned_to: null });
     } catch (err) {
-        console.error('Update price error:', err);
-        res.status(500).json({ error: 'Server error during price update' });
+        console.error('Task creation error:', err);
+        res.status(500).json({ error: 'Server error during task creation' });
     }
 });
 
-// POST /api/tasks/:id/accept — Accept an open task
+/* ─── POST /api/tasks/:id/accept ──────────────────────────────────────────── */
+
 router.post('/:id/accept', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
         const task = await Task.findById(req.params.id);
-
         if (!task) return res.status(404).json({ error: 'Task not found' });
         if (task.status !== 'open') return res.status(400).json({ error: 'Task is no longer available' });
-        if (String(task.posted_by) === String(userId)) {
-            return res.status(403).json({ error: 'You cannot accept your own task' });
-        }
+        if (String(task.posted_by) === String(userId)) return res.status(403).json({ error: 'You cannot accept your own task' });
 
         const acceptee = await User.findById(userId);
         if (!acceptee) return res.status(404).json({ error: 'User not found' });
-        if (acceptee.weekly_hours_completed >= 6) {
-            return res.status(403).json({ error: 'Weekly hours cap reached (6h). Cannot accept new tasks.' });
-        }
+        if (acceptee.weekly_hours_completed >= 6) return res.status(403).json({ error: 'Weekly hours cap reached (6h).' });
 
         task.assigned_to = userId;
         task.status = 'assigned';
         await task.save();
 
-        await Transaction.findOneAndUpdate(
-            { task_id: task._id, status: 'escrow' },
-            { receiver_id: userId }
+        await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { receiver_id: userId });
+
+        // Create chat document for this task
+        await Chat.findOneAndUpdate(
+            { taskId: task._id },
+            { taskId: task._id, participants: [task.posted_by, userId], $setOnInsert: { messages: [] } },
+            { upsert: true, new: true }
         );
 
-        const populated = await Task.findById(task._id)
-            .populate('posted_by', 'name')
-            .populate('assigned_to', 'name');
+        const io = getIo(req);
+        await createAndEmitNotification(io, {
+            userId: task.posted_by,
+            type: 'task_accepted',
+            message: `${acceptee.name} accepted your task "${task.title}".`,
+            relatedTaskId: task._id,
+        });
 
-        console.log(`[TASK ACCEPTED] id=${task._id} by=${userId}`);
+        const populated = await Task.findById(task._id).populate('posted_by', 'name').populate('assigned_to', 'name');
         res.json({ message: 'Task accepted successfully', task: populated });
     } catch (err) {
         console.error('Accept task error:', err);
@@ -292,59 +196,234 @@ router.post('/:id/accept', authMiddleware, async (req, res) => {
     }
 });
 
-// POST /api/tasks/:id/complete — Mark task complete
+/* ─── POST /api/tasks/:id/complete — Worker marks done (awaiting_approval) ── */
+
 router.post('/:id/complete', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
         const task = await Task.findById(req.params.id);
-
         if (!task) return res.status(404).json({ error: 'Task not found' });
-        if (task.status !== 'assigned') return res.status(400).json({ error: 'Task is not in assigned state' });
-        if (String(task.assigned_to) !== String(userId)) {
-            return res.status(403).json({ error: 'Only the assigned user can mark this task complete' });
-        }
+        if (!['assigned', 'in_progress'].includes(task.status)) return res.status(400).json({ error: 'Task must be assigned or in_progress to mark complete' });
+        if (String(task.assigned_to) !== String(userId)) return res.status(403).json({ error: 'Only the assigned worker can mark complete' });
 
-        task.status = 'completed';
+        task.status = 'awaiting_approval';
         await task.save();
 
-        const payoutAmount = task.finalPrice || task.price;
-        await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { status: 'released' });
-        await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: payoutAmount } });
+        // DO NOT release escrow — awaiting client approval
 
-        const assignee = await User.findById(userId);
-        const newReliability = assignee.reliability_score + 2;
-        const newWeeklyHours = assignee.weekly_hours_completed + (task.estimatedHours || task.estimated_time_hours || 1);
-        const newTier = calculateTier(newReliability);
-        const weeklyCapRespected = newWeeklyHours <= 6;
-
-        await User.findByIdAndUpdate(userId, {
-            reliability_score: newReliability,
-            weekly_hours_completed: newWeeklyHours,
-            skill_tier: newTier,
+        const worker = await User.findById(userId).select('name');
+        const io = getIo(req);
+        await createAndEmitNotification(io, {
+            userId: task.posted_by,
+            type: 'task_completed',
+            message: `${worker.name} marked your task "${task.title}" as completed. Please review and approve.`,
+            relatedTaskId: task._id,
         });
 
-        const completedCount = await Task.countDocuments({ assigned_to: userId, status: 'completed' });
-        await awardBadges(userId, completedCount, weeklyCapRespected);
-
-        const updatedAssignee = await User.findById(userId).select('-password_hash');
-        res.json({ message: 'Task completed successfully', task, user: updatedAssignee });
+        res.json({ message: 'Task marked as awaiting approval. Client will be notified.', task });
     } catch (err) {
         console.error('Complete task error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
 
-// POST /api/tasks/:id/cancel — Cancel task (only poster)
+/* ─── POST /api/tasks/:id/approve — Client approves + releases escrow ──────── */
+
+router.post('/:id/approve', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        if (String(task.posted_by) !== String(userId)) return res.status(403).json({ error: 'Only the client can approve this task' });
+        if (task.status !== 'awaiting_approval') return res.status(400).json({ error: 'Task is not awaiting approval' });
+
+        task.status = 'completed';
+        await task.save();
+
+        // Release escrow → pay worker
+        const payoutAmount = task.finalPrice || task.price;
+        await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { status: 'released' });
+        await User.findByIdAndUpdate(task.assigned_to, { $inc: { wallet_balance: payoutAmount } });
+
+        // Update worker reputation
+        const assignee = await User.findById(task.assigned_to);
+        const newReliability = (assignee.reliability_score || 0) + 2;
+        const newWeeklyHours = (assignee.weekly_hours_completed || 0) + (task.estimatedHours || task.estimated_time_hours || 1);
+        const newTier = calculateTier(newReliability);
+        const weeklyCapRespected = newWeeklyHours <= 6;
+
+        await User.findByIdAndUpdate(task.assigned_to, {
+            reliability_score: newReliability,
+            weekly_hours_completed: newWeeklyHours,
+            skill_tier: newTier,
+        });
+
+        const completedCount = await Task.countDocuments({ assigned_to: task.assigned_to, status: 'completed' });
+        await awardBadges(task.assigned_to, completedCount, weeklyCapRespected);
+
+        const io = getIo(req);
+        await createAndEmitNotification(io, {
+            userId: task.assigned_to,
+            type: 'task_approved',
+            message: `Your work on "${task.title}" has been approved! ₹${payoutAmount} credited to your wallet.`,
+            relatedTaskId: task._id,
+        });
+
+        const updatedAssignee = await User.findById(task.assigned_to).select('-password_hash');
+        res.json({ message: 'Task approved and payment released.', task, payout: payoutAmount, worker: updatedAssignee });
+    } catch (err) {
+        console.error('Approve task error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── POST /api/tasks/:id/dispute ─────────────────────────────────────────── */
+
+router.post('/:id/dispute', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const isClient = String(task.posted_by) === String(userId);
+        const isWorker = String(task.assigned_to) === String(userId);
+        if (!isClient && !isWorker) return res.status(403).json({ error: 'Only task participants can raise a dispute' });
+
+        const allowedStatuses = ['assigned', 'in_progress', 'awaiting_approval'];
+        if (!allowedStatuses.includes(task.status)) {
+            return res.status(400).json({ error: `Cannot dispute a task with status "${task.status}"` });
+        }
+
+        task.status = 'disputed';
+        await task.save();
+
+        // Escrow is frozen — do NOT release or refund
+
+        const raiser = await User.findById(userId).select('name');
+        const otherUserId = isClient ? task.assigned_to : task.posted_by;
+        const io = getIo(req);
+
+        await createAndEmitNotification(io, {
+            userId: otherUserId,
+            type: 'dispute_raised',
+            message: `${raiser.name} raised a dispute on task "${task.title}". The task is frozen pending admin review.`,
+            relatedTaskId: task._id,
+        });
+
+        res.json({ message: 'Dispute raised. Task is frozen pending admin review.', task });
+    } catch (err) {
+        console.error('Dispute task error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── PATCH /api/tasks/:id/increase-price — Client increases price post-assign */
+
+router.patch('/:id/increase-price', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { newPrice } = req.body;
+
+        if (newPrice === undefined) return res.status(400).json({ error: 'newPrice is required' });
+        const parsedNew = Math.round(Number(newPrice));
+        if (isNaN(parsedNew) || parsedNew <= 0) return res.status(400).json({ error: 'Invalid price' });
+
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        if (String(task.posted_by) !== String(userId)) return res.status(403).json({ error: 'Only the client can increase price' });
+
+        const allowedStatuses = ['assigned', 'in_progress', 'awaiting_approval'];
+        if (!allowedStatuses.includes(task.status)) {
+            return res.status(400).json({ error: `Cannot increase price when task status is "${task.status}"` });
+        }
+
+        const currentPrice = task.finalPrice || task.price;
+        if (parsedNew <= currentPrice) {
+            return res.status(400).json({ error: `New price (₹${parsedNew}) must be greater than current price (₹${currentPrice})` });
+        }
+
+        const difference = parsedNew - currentPrice;
+        const poster = await User.findById(userId);
+        if (poster.wallet_balance < difference) {
+            return res.status(400).json({ error: `Insufficient wallet balance. Need ₹${difference} more, have ₹${poster.wallet_balance}` });
+        }
+
+        // Deduct difference from client wallet, add to escrow
+        await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -difference } });
+        await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { amount: parsedNew });
+
+        task.finalPrice = parsedNew;
+        task.price = parsedNew;
+        task.isPriceEdited = true;
+        await task.save();
+
+        const worker = task.assigned_to;
+        const io = getIo(req);
+        await createAndEmitNotification(io, {
+            userId: worker,
+            type: 'price_increased',
+            message: `The client increased the price for "${task.title}" from ₹${currentPrice} to ₹${parsedNew}. Extra ₹${difference} added to escrow.`,
+            relatedTaskId: task._id,
+        });
+
+        res.json({ message: 'Price increased successfully', task, previousPrice: currentPrice, newPrice: parsedNew, difference });
+    } catch (err) {
+        console.error('Increase price error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── PATCH /api/tasks/:id/update-price — Pre-assignment price edit ────────── */
+
+router.patch('/:id/update-price', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { price: newPrice } = req.body;
+
+        if (newPrice === undefined) return res.status(400).json({ error: 'price is required' });
+        const parsedPrice = Math.round(Number(newPrice));
+        if (isNaN(parsedPrice) || parsedPrice <= 0) return res.status(400).json({ error: 'price must be a positive number' });
+
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        if (String(task.posted_by) !== String(userId)) return res.status(403).json({ error: 'Only the task poster can update the price' });
+        if (task.status !== 'open') return res.status(400).json({ error: 'Price can only be updated while the task is open' });
+        if (task.assigned_to) return res.status(400).json({ error: 'Price is locked — task has already been assigned' });
+
+        const oldPrice = task.finalPrice || task.price;
+        const delta = parsedPrice - oldPrice;
+
+        const poster = await User.findById(userId);
+        if (delta > 0 && poster.wallet_balance < delta) {
+            return res.status(400).json({ error: `Insufficient wallet balance. Need ₹${delta} more, have ₹${poster.wallet_balance}` });
+        }
+
+        if (delta > 0) await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: -delta } });
+        else if (delta < 0) await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: Math.abs(delta) } });
+
+        await Transaction.findOneAndUpdate({ task_id: task._id, status: 'escrow' }, { amount: parsedPrice });
+        task.finalPrice = parsedPrice;
+        task.price = parsedPrice;
+        task.isPriceEdited = true;
+        await task.save();
+
+        const populated = await Task.findById(task._id).populate('posted_by', 'name').populate('assigned_to', 'name');
+        res.json({ message: 'Price updated successfully', task: populated, finalPrice: parsedPrice, delta });
+    } catch (err) {
+        console.error('Update price error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── POST /api/tasks/:id/cancel ─────────────────────────────────────────── */
+
 router.post('/:id/cancel', authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
         const task = await Task.findById(req.params.id);
-
         if (!task) return res.status(404).json({ error: 'Task not found' });
         if (task.status === 'completed') return res.status(400).json({ error: 'Cannot cancel a completed task' });
-        if (String(task.posted_by) !== String(userId)) {
-            return res.status(403).json({ error: 'Only the poster can cancel this task' });
-        }
+        if (String(task.posted_by) !== String(userId)) return res.status(403).json({ error: 'Only the poster can cancel this task' });
 
         task.status = 'cancelled';
         await task.save();
@@ -358,16 +437,31 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
             if (assignee) {
                 const newReliability = assignee.reliability_score - 3;
                 const newTier = calculateTier(newReliability);
-                await User.findByIdAndUpdate(task.assigned_to, {
-                    reliability_score: newReliability,
-                    skill_tier: newTier,
-                });
+                await User.findByIdAndUpdate(task.assigned_to, { reliability_score: newReliability, skill_tier: newTier });
             }
         }
 
         res.json({ message: 'Task cancelled and funds refunded', task });
     } catch (err) {
         console.error('Cancel task error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+/* ─── GET /api/tasks/:id/chat — Fetch chat history ───────────────────────── */
+
+router.get('/:id/chat', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const isParticipant = String(task.posted_by) === String(userId) || String(task.assigned_to) === String(userId);
+        if (!isParticipant) return res.status(403).json({ error: 'Not a participant of this task' });
+
+        const chat = await Chat.findOne({ taskId: req.params.id });
+        res.json(chat || { taskId: req.params.id, messages: [] });
+    } catch (err) {
         res.status(500).json({ error: 'Server error' });
     }
 });
