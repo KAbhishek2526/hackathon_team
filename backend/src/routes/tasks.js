@@ -95,20 +95,24 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 });
 
-// GET /api/tasks/my — Tasks posted by or assigned to the current user
+// GET /api/tasks/my — Tasks posted by or assigned to current user (split server-side)
 router.get('/my', authMiddleware, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const tasks = await Task.find({
-            $or: [{ posted_by: userId }, { assigned_to: userId }],
-        })
-            .populate('posted_by', 'name')
-            .populate('assigned_to', 'name')
-            .sort({ created_at: -1 });
-        res.json(tasks);
-    } catch (err) {
-        res.status(500).json({ error: 'Server error' });
-    }
+  try {
+    const userId = req.user.id;
+    const [posted, assigned] = await Promise.all([
+      Task.find({ posted_by: userId })
+        .populate('posted_by', 'name')
+        .populate('assigned_to', 'name')
+        .sort({ created_at: -1 }),
+      Task.find({ assigned_to: userId })
+        .populate('posted_by', 'name')
+        .populate('assigned_to', 'name')
+        .sort({ created_at: -1 }),
+    ]);
+    res.json({ posted, assigned });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // POST /api/tasks/:id/accept — Accept an open task (cannot accept own task)

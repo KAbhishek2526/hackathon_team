@@ -10,9 +10,14 @@ interface Task {
     estimated_time_hours: number;
     price: number;
     status: string;
-    posted_by: { _id: string; name: string };
-    assigned_to: { _id: string; name: string } | null;
+    posted_by: { name: string } | null;
+    assigned_to: { name: string } | null;
     created_at: string;
+}
+
+interface MyTasksData {
+    posted: Task[];
+    assigned: Task[];
 }
 
 const statusColor: Record<string, string> = {
@@ -23,26 +28,28 @@ const statusColor: Record<string, string> = {
 };
 
 export default function MyTasksPage() {
-    const [tasks, setTasks] = useState<Task[]>([]);
+    const [data, setData] = useState<MyTasksData>({ posted: [], assigned: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [actionError, setActionError] = useState('');
-    const [userId, setUserId] = useState('');
+    const [actionMsg, setActionMsg] = useState('');
 
-    useEffect(() => {
-        const user = localStorage.getItem('user');
-        if (user) setUserId(JSON.parse(user).id || JSON.parse(user)._id || '');
-        api.getMyTasks()
-            .then((data) => setTasks(data as Task[]))
-            .catch(() => setError('Failed to load tasks.'))
+    function loadTasks() {
+        return api.getMyTasks()
+            .then((res) => setData(res as MyTasksData))
+            .catch(() => setError('Failed to load tasks. Please login.'))
             .finally(() => setLoading(false));
-    }, []);
+    }
+
+    useEffect(() => { loadTasks(); }, []);
 
     async function handleComplete(id: string) {
         setActionError('');
+        setActionMsg('');
         try {
             await api.completeTask(id);
-            setTasks((prev) => prev.map((t) => t._id === id ? { ...t, status: 'completed' } : t));
+            setActionMsg('Task marked complete! Wallet credited.');
+            loadTasks();
         } catch (err: unknown) {
             setActionError(err instanceof Error ? err.message : 'Action failed');
         }
@@ -50,16 +57,15 @@ export default function MyTasksPage() {
 
     async function handleCancel(id: string) {
         setActionError('');
+        setActionMsg('');
         try {
             await api.cancelTask(id);
-            setTasks((prev) => prev.map((t) => t._id === id ? { ...t, status: 'cancelled' } : t));
+            setActionMsg('Task cancelled. Funds refunded to your wallet.');
+            loadTasks();
         } catch (err: unknown) {
             setActionError(err instanceof Error ? err.message : 'Action failed');
         }
     }
-
-    const posted = tasks.filter((t) => t.posted_by?._id === userId || String(t.posted_by) === userId);
-    const assigned = tasks.filter((t) => t.assigned_to && (t.assigned_to._id === userId || String(t.assigned_to) === userId));
 
     function TaskCard({ task, role }: { task: Task; role: 'poster' | 'assignee' }) {
         return (
@@ -71,11 +77,15 @@ export default function MyTasksPage() {
                     </div>
                     <div className="text-right shrink-0">
                         <p className="text-indigo-400 font-bold">₹{task.price}</p>
-                        <span className={`text-xs px-2.5 py-1 rounded-full border mt-1 inline-block ${statusColor[task.status]}`}>{task.status}</span>
+                        <span className={`text-xs px-2.5 py-1 rounded-full border mt-1 inline-block ${statusColor[task.status]}`}>
+                            {task.status}
+                        </span>
                     </div>
                 </div>
-                <div className="mt-3 text-xs text-slate-500">
-                    {role === 'poster' ? `Assigned to: ${task.assigned_to?.name || 'Unmatched'}` : `Posted by: ${task.posted_by?.name}`}
+                <div className="mt-2 text-xs text-slate-500">
+                    {role === 'poster'
+                        ? `Assigned to: ${task.assigned_to?.name || 'Not yet accepted'}`
+                        : `Posted by: ${task.posted_by?.name || '?'}`}
                 </div>
                 <div className="flex gap-2 mt-4">
                     {role === 'assignee' && task.status === 'assigned' && (
@@ -104,22 +114,34 @@ export default function MyTasksPage() {
             <h1 className="text-2xl font-bold text-white mb-6">My Tasks</h1>
 
             {error && <p className="text-red-400 mb-4">{error}</p>}
-            {actionError && <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">{actionError}</div>}
+            {actionMsg && (
+                <div className="mb-4 p-3 bg-green-900/40 border border-green-700 rounded text-green-300 text-sm">{actionMsg}</div>
+            )}
+            {actionError && (
+                <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">{actionError}</div>
+            )}
             {loading && <p className="text-slate-400">Loading…</p>}
 
             {!loading && (
                 <>
                     <section className="mb-8">
-                        <h2 className="text-lg font-semibold text-slate-300 mb-3">Tasks I Posted ({posted.length})</h2>
-                        {posted.length === 0 ? <p className="text-slate-500 text-sm">None yet.</p> : (
-                            <div className="space-y-4">{posted.map((t) => <TaskCard key={t._id} task={t} role="poster" />)}</div>
-                        )}
+                        <h2 className="text-lg font-semibold text-slate-300 mb-3">
+                            Tasks I Posted <span className="text-slate-500 font-normal text-sm">({data.posted.length})</span>
+                        </h2>
+                        {data.posted.length === 0
+                            ? <p className="text-slate-500 text-sm">You haven&apos;t posted any tasks yet.</p>
+                            : <div className="space-y-4">{data.posted.map((t) => <TaskCard key={t._id} task={t} role="poster" />)}</div>
+                        }
                     </section>
+
                     <section>
-                        <h2 className="text-lg font-semibold text-slate-300 mb-3">Tasks Assigned to Me ({assigned.length})</h2>
-                        {assigned.length === 0 ? <p className="text-slate-500 text-sm">None yet.</p> : (
-                            <div className="space-y-4">{assigned.map((t) => <TaskCard key={t._id} task={t} role="assignee" />)}</div>
-                        )}
+                        <h2 className="text-lg font-semibold text-slate-300 mb-3">
+                            Tasks Assigned to Me <span className="text-slate-500 font-normal text-sm">({data.assigned.length})</span>
+                        </h2>
+                        {data.assigned.length === 0
+                            ? <p className="text-slate-500 text-sm">No tasks assigned to you yet. Browse Available Tasks to accept one.</p>
+                            : <div className="space-y-4">{data.assigned.map((t) => <TaskCard key={t._id} task={t} role="assignee" />)}</div>
+                        }
                     </section>
                 </>
             )}
