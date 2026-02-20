@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import LogoutButton from './components/LogoutButton';
 
 export const metadata: Metadata = {
   title: 'MicroTask — Student Micro-Economy Platform',
@@ -29,9 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <NavLink href="/profile" label="Profile" />
               <NavLink href="/wallet" label="Wallet" />
             </div>
-            <a href="/login" id="logout-btn" className="text-sm text-red-400 hover:text-red-300 transition-colors" onClick={(e) => { e.preventDefault(); localStorage.removeItem('token'); localStorage.removeItem('user'); window.location.href = '/login'; }}>
-              Logout
-            </a>
+            <LogoutButton />
           </div>
         </nav>
         <main className="max-w-5xl mx-auto px-4 py-8">{children}</main>
