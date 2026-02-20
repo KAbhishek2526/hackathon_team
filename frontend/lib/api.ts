@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 
 function getToken(): string | null {
     if (typeof window === 'undefined') return null;
@@ -31,6 +31,7 @@ export const api = {
     getOpenTasks: () => apiFetch<object[]>('/api/tasks'),
     getMyTasks: () => apiFetch<object[]>('/api/tasks/my'),
     postTask: (body: object) => apiFetch<object>('/api/tasks', { method: 'POST', body: JSON.stringify(body) }),
+    acceptTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/accept`, { method: 'POST' }),
     completeTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/complete`, { method: 'POST' }),
     cancelTask: (id: string) => apiFetch<object>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
     resetWeek: () => apiFetch<object>('/api/reset-week', { method: 'POST' }),
