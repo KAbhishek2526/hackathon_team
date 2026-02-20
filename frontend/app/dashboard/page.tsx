@@ -79,24 +79,6 @@ export default function DashboardPage() {
                 </div>
             )}
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {[
-                    { href: '/tasks/post', label: 'Post a Task', desc: 'AI classifies and prices it automatically', color: 'indigo' },
-                    { href: '/tasks/available', label: 'Browse Open Tasks', desc: 'View tasks not yet assigned', color: 'sky' },
-                    { href: '/tasks/my', label: 'My Tasks', desc: 'Manage posted and assigned tasks', color: 'violet' },
-                    { href: '/profile', label: 'Profile', desc: 'View full profile and stats', color: 'teal' },
-                    { href: '/wallet', label: 'Wallet', desc: 'View balance and transactions', color: 'emerald' },
-                ].map((link) => (
-                    <a
-                        key={link.href}
-                        href={link.href}
-                        className="bg-slate-900 border border-slate-800 hover:border-indigo-700 rounded-xl p-5 block transition-colors group"
-                    >
-                        <p className="font-semibold text-white group-hover:text-indigo-400 transition-colors">{link.label}</p>
-                        <p className="text-slate-500 text-sm mt-1">{link.desc}</p>
-                    </a>
-                ))}
-            </div>
         </div>
     );
 }

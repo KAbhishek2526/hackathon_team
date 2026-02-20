@@ -27,7 +27,7 @@ export default function RegisterPage() {
         <div className="min-h-[80vh] flex items-center justify-center">
             <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8">
                 <h1 className="text-2xl font-bold text-white mb-2">Create Account</h1>
-                <p className="text-slate-400 text-sm mb-6">Only verified college emails allowed.</p>
+                <p className="text-slate-400 text-sm mb-6">Use your college email — any <span className="text-indigo-300">.edu</span>, <span className="text-indigo-300">.ac.in</span>, <span className="text-indigo-300">.ac.uk</span> or similar domain.</p>
 
                 {error && <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">{error}</div>}
 
