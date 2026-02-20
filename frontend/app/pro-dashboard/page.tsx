@@ -68,7 +68,7 @@ export default function ProDashboardPage() {
                 <div className="text-4xl">💼</div>
                 <div>
                     <h1 className="text-2xl font-bold text-white">Professional Dashboard</h1>
-                    <p className="text-purple-300 text-sm mt-0.5">Welcome back, {user.name} — you are in <span className="font-semibold">Professional Mode</span></p>
+                    <p className="text-purple-300 text-sm mt-0.5">Welcome back, {user.name} — you are in <span className="font-semibold">Professional Mode</span> on FreeHour</p>
                     <p className="text-slate-400 text-xs mt-1">You can post tasks for students to complete.</p>
                 </div>
             </div>

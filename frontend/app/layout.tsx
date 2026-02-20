@@ -3,8 +3,8 @@ import './globals.css';
 import ClientNav from './components/ClientNav';
 
 export const metadata: Metadata = {
-  title: 'MicroTask — Student Micro-Economy Platform',
-  description: 'AI-governed micro-task economy exclusively for verified college students.',
+  title: 'FreeHour — Student Micro-Economy Platform',
+  description: 'AI-governed task economy for verified college students and professionals.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

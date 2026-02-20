@@ -15,6 +15,7 @@ const chatRoutes = require('./routes/chats');
 
 const Config = require('./models/Config');
 const { registerSocketHandlers } = require('./socket/socketHandler');
+const { startExpiryJob } = require('./jobs/expiryJob');
 
 const app = express();
 
@@ -82,6 +83,9 @@ mongoose
             console.log(`🚀 Backend running on http://localhost:${PORT}`);
             console.log(`🔌 Socket.IO ready on http://localhost:${PORT}`);
         });
+
+        // Start escrow expiry background job
+        startExpiryJob();
     })
     .catch((err) => {
         console.error('❌ MongoDB connection failed:', err.message);

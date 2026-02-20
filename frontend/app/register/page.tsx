@@ -40,7 +40,7 @@ export default function RegisterPage() {
         return (
             <div className="min-h-[80vh] flex items-center justify-center">
                 <div className="w-full max-w-lg">
-                    <h1 className="text-3xl font-bold text-white text-center mb-2">Join MicroTask</h1>
+                    <h1 className="text-3xl font-bold text-white text-center mb-2">Join FreeHour</h1>
                     <p className="text-slate-400 text-center mb-10">Who are you?</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                         {/* Student Card */}

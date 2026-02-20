@@ -45,6 +45,7 @@ const statusColors: Record<string, string> = {
     completed: 'text-green-400 bg-green-900/30 border-green-800',
     disputed: 'text-red-400 bg-red-900/30 border-red-800',
     cancelled: 'text-slate-400 bg-slate-800 border-slate-700',
+    expired: 'text-orange-400 bg-orange-900/30 border-orange-800',
 };
 
 const chatStatusPill: Record<string, string> = {
@@ -237,6 +238,13 @@ export default function TaskDetailPage() {
                         onClick={() => { if (!confirm('Raise a dispute? This will freeze the task.')) return; handleAction('dispute', () => api.disputeTask(taskId)); }}
                         className="px-5 py-2 bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors">
                         {actionLoading === 'dispute' ? 'Raising…' : '⚠ Raise Dispute'}
+                    </button>
+                )}
+                {isClient && task.status === 'open' && (
+                    <button id="cancel-task-btn" disabled={actionLoading === 'cancel'}
+                        onClick={() => { if (!confirm('Cancel this task? Escrow will be refunded to your wallet.')) return; handleAction('cancel', () => api.cancelTask(taskId)); }}
+                        className="px-5 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors">
+                        {actionLoading === 'cancel' ? 'Cancelling…' : '✕ Cancel Task'}
                     </button>
                 )}
             </div>

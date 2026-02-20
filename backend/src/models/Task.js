@@ -18,10 +18,11 @@ const taskSchema = new mongoose.Schema({
     inflationFactor: { type: Number, default: 1.0 },
     posted_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     assigned_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    status: { type: String, enum: ['open', 'assigned', 'in_progress', 'awaiting_approval', 'completed', 'disputed', 'cancelled'], default: 'open' },
+    status: { type: String, enum: ['open', 'assigned', 'in_progress', 'awaiting_approval', 'completed', 'disputed', 'cancelled', 'expired'], default: 'open' },
     digital_or_physical: { type: String, enum: ['digital', 'physical'], default: 'digital' },
     postedByRole: { type: String, enum: ['student', 'global_client'], default: 'student' },
     collegeDomain: { type: String, default: null },
+    expiresAt: { type: Date, default: () => new Date(Date.now() + 72 * 60 * 60 * 1000) }, // 72h from creation
     created_at: { type: Date, default: Date.now },
 });
 

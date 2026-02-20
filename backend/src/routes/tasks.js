@@ -429,6 +429,50 @@ router.patch('/:id/increase-price', authMiddleware, async (req, res) => {
     }
 });
 
+/* ─── POST /api/tasks/:id/cancel — Client cancels open task + refunds escrow ─ */
+
+router.post('/:id/cancel', authMiddleware, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        if (String(task.posted_by) !== String(userId)) {
+            return res.status(403).json({ error: 'Only the client can cancel this task' });
+        }
+        if (task.status !== 'open') {
+            return res.status(400).json({ error: `Cannot cancel a task with status "${task.status}". Only open tasks can be cancelled.` });
+        }
+
+        const refundAmount = task.finalPrice || task.price || 0;
+
+        // Check for active escrow (prevent double refund)
+        const escrowTx = await Transaction.findOne({ task_id: task._id, status: 'escrow' });
+        if (escrowTx) {
+            await Transaction.findByIdAndUpdate(escrowTx._id, { status: 'refunded' });
+            if (refundAmount > 0) {
+                await User.findByIdAndUpdate(userId, { $inc: { wallet_balance: refundAmount } });
+            }
+        }
+
+        task.status = 'cancelled';
+        await task.save();
+
+        const io = getIo(req);
+        await createAndEmitNotification(io, {
+            userId: task.posted_by,
+            type: 'general',
+            message: `Your task "${task.title}" has been cancelled. ₹${refundAmount} has been refunded to your wallet.`,
+            relatedTaskId: task._id,
+        });
+
+        res.json({ message: 'Task cancelled and escrow refunded.', task, refundAmount });
+    } catch (err) {
+        console.error('Cancel task error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 /* ─── PATCH /api/tasks/:id/update-price — Pre-assignment price edit ────────── */
 
 router.patch('/:id/update-price', authMiddleware, async (req, res) => {
