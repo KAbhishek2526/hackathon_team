@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import LogoutButton from './LogoutButton';
 import NotificationBell from './NotificationBell';
 
@@ -16,8 +17,11 @@ function NavLink({ href, label }: { href: string; label: string }) {
 export default function ClientNav() {
     const [role, setRole] = useState<Role>(null);
     const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [mounted, setMounted] = useState(false);
+    const pathname = usePathname();
 
     useEffect(() => {
+        setMounted(true);
         const token = localStorage.getItem('token');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         if (token && user?.id) {
@@ -25,6 +29,9 @@ export default function ClientNav() {
             setRole(user?.role || 'student');
         }
     }, []);
+
+    // Landing page (/) has its own self-contained navbar — suppress layout nav
+    if (!mounted || pathname === '/') return null;
 
     const isGlobalClient = role === 'global_client';
 
