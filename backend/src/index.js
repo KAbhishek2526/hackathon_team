@@ -20,10 +20,24 @@ const { startExpiryJob } = require('./jobs/expiryJob');
 const app = express();
 
 // Middleware
+const allowedOriginPatterns = [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/,
+];
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: (origin, callback) => {
+        // Allow no-origin requests (curl, mobile native, etc.)
+        if (!origin) return callback(null, true);
+        const allowed = allowedOriginPatterns.some((pattern) => pattern.test(origin));
+        if (allowed) return callback(null, true);
+        callback(new Error(`CORS: origin "${origin}" not allowed`));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
 }));
+// Pre-flight for all routes
+app.options('*', cors());
 app.use(express.json());
 
 // Health check

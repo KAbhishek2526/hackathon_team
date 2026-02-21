@@ -1,0 +1,11 @@
+:8080 {
+    # Route API calls to your backend
+    handle_path /api/* {
+        reverse_proxy localhost:5001
+    }
+
+    # Route everything else to your frontend
+    handle {
+        reverse_proxy localhost:3000
+    }
+}
